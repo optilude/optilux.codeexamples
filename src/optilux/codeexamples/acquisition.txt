@@ -1,0 +1,81 @@
+=======================
+Examples of acquisition
+=======================
+
+Let us create an object 'favorites' in the root of the portal and show that
+using implicit attribute acquisition, it can be acquired from a subfolder also
+inside the portal.
+
+    >>> from plone.app.testing import setRoles
+    >>> from plone.app.testing import TEST_USER_NAME
+    
+    >>> portal = layer['portal']
+    
+    >>> setRoles(portal, TEST_USER_NAME, ('Manager',))
+    
+    >>> _ = portal.invokeFactory('Folder', 'folder', title=u"A folder")
+    >>> folder = portal['folder']
+    
+    >>> _ = portal.invokeFactory('Document', 'favorites')
+    >>> favorites = portal['favorites']
+
+Let us attempt to access 'favorites' as if it were an attribute of 'folder':
+
+    >>> from Acquisition import aq_base
+    >>> acquiring = folder.favorites
+    >>> aq_base(acquiring) is aq_base(favorites)
+    True
+    
+We can make acquisition explicit, however. In this case, acquisition wrapper
+will still be applied (e.g. for security), but resources will not be acquired
+from items higher up the acquisition chain.
+    
+    >>> non_acquiring = getattr(folder.aq_explicit, 'favorites', None)
+    >>> non_acquiring is None
+    True
+    
+We can also acquire attributes of a parent object:
+
+    >>> getattr(folder, 'some_attribute', None) is None
+    True
+
+    >>> portal.some_attribute = 1
+    >>> getattr(folder, 'some_attribute', None)
+    1
+
+When we acquire objects that are themselves acquisition-aware, we can 
+inspect their acquisition chain.
+
+    >>> from Acquisition import aq_chain, aq_inner
+    >>> aq_chain(portal.favorites) # doctest: +ELLIPSIS
+    [<ATDocument at /plone/favorites>, <PloneSite at /plone>, <Application at >, <ZPublisher.BaseRequest.RequestContainer object at ...>]
+    
+    >>> aq_chain(folder.favorites) # doctest: +ELLIPSIS
+    [<ATDocument at /plone/favorites used for /plone/folder>, <ATFolder at /plone/folder>, <PloneSite at /plone>, <Application at >, <ZPublisher.BaseRequest.RequestContainer object at ...>]
+
+Note that we can explicitly request the innermost chain, which is normally the
+containment chain:
+
+    >>> aq_chain(aq_inner(portal.favorites)) # doctest: +ELLIPSIS
+    [<ATDocument at /plone/favorites>, <PloneSite at /plone>, <Application at >, <ZPublisher.BaseRequest.RequestContainer object at ...>]
+
+Notice how the chain for 'favorites' is different depending on where it was
+actually acquired from!
+
+If we need to, we can play with the acquisition chain ourselves. Below, we
+instantiate an object in memory without connecting it to the containment
+hierarchy and then wrap it temporarily in the context of an object that
+*is* in the containment hierarchy. This would, for example, let the temporary
+object be subject to proper Zope 2 security.
+
+    >>> from Products.ATContentTypes.content.document import ATDocument
+    >>> temp_document = ATDocument('temp_document')
+    >>> aq_chain(temp_document)
+    [<ATDocument at temp_document>]
+    >>> aq_chain(temp_document.__of__(portal)) # doctest: +ELLIPSIS
+    [<ATDocument at /plone/temp_document>, <PloneSite at /plone>, <Application at >, <ZPublisher.BaseRequest.RequestContainer object at ...>]
+
+Of course, the object isn't really there:
+
+    >>> 'temp_document' in portal
+    False

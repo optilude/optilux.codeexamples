@@ -1,0 +1,185 @@
+=============================
+Examples of using Zope events
+=============================
+
+Events in Zope are synchronous. Any number of subscribers can listen for
+specific events. When the events are emitted, the emitting code will block
+until all event handlers are complete. Of course, nothing is stopping a
+particular even handler from spawning a new thread.
+
+Events, like most things in the Zope Component Architecture, are based on
+interfaces.
+
+    >>> from zope.interface import Interface, Attribute
+
+    >>> class INewGigEvent(Interface):
+    ...     """An event signaling that there's a new gig in town
+    ...     """
+    ...     
+    ...     band = Attribute("Name of the band")
+
+    >>> from zope.interface import implements
+    >>> class NewGigEvent(object):
+    ...     implements(INewGigEvent)
+    ...     
+    ...     def __init__(self, band):
+    ...         self.band = band
+    
+Emitting an event is easy:
+
+    >>> from zope.event import notify
+    >>> notify(NewGigEvent("The Gypsy Sun and Rainbow Band"))
+
+Of course, not much happens until we register a subscriber. Subscribers are
+typically just functions, though any callable will do.
+
+    >>> from zope.component import adapter
+    >>> @adapter(INewGigEvent)
+    ... def invite_friends(new_gig):
+    ...     print "Hey guys, let's go see", new_gig.band
+
+Notice the ``@adapter`` decorator. This is used to tell the component registry 
+which type of event to listen for. This also reveals a curious detail about
+event handlers - they are stored in the adapter registry. In fact, they are
+just like adapter *factories* that don't return anything, but do all their
+work when called. Not that you need to worry about that.
+
+In ZCML, we would register subscribers like this::
+
+    <subscriber handler=".events.invite_friends" />
+    
+or, if we did not use the ``@adapter`` syntax, we could do::
+
+    <subscriber
+        for=".interfaces.INewGigEvent"
+        handler=".events.invite_friends"
+        />
+
+For the purposes of the test, we will use the Python API:
+
+    >>> from zope.component import provideHandler
+    >>> provideHandler(invite_friends)
+
+We can now watch this handler execute.
+
+    >>> notify(NewGigEvent("The Gypsy Sun and Rainbow Band"))
+    Hey guys, let's go see The Gypsy Sun and Rainbow Band
+
+We can register as many event handlers as we like, although the order cannot
+generally be guaranteed. Event handlers also take interface inheritance into
+account. Thus, we can have more specific and more general events.
+
+    >>> class IFreeGigEvent(INewGigEvent):
+    ...     """A new gig that's also free
+    ...     """
+
+    >>> class FreeGigEvent(NewGigEvent):
+    ...     implements(IFreeGigEvent)
+
+    >>> @adapter(IFreeGigEvent)
+    ... def tell_everyone(free_gig):
+    ...     print "Wow! We can see", free_gig.band, "for free!"
+    >>> provideHandler(tell_everyone)
+
+Our new, more specific, event handler does not execute for the more general event:
+
+    >>> notify(NewGigEvent("The Gypsy Sun and Rainbow Band"))
+    Hey guys, let's go see The Gypsy Sun and Rainbow Band
+    
+But the more general event handler will execute for the more specific event:
+
+    >>> notify(FreeGigEvent("The Foo Fighters"))
+    Hey guys, let's go see The Foo Fighters
+    Wow! We can see The Foo Fighters for free!
+
+Object events
+-------------
+
+In the case above, the event is quite specific to the problem domain, and the
+set of subscribers is likely to be limited. However, various parts of Zope and 
+Plone emit much more general events. Mostly, these derive from 
+``zope.component.interfaces.IObjectEvent`` and describe things that happen in
+containers (objects added, moved, removed) or during an object's life cycle
+(object created, modified, deleted).
+
+Object events are not special, and you can register general handlers for
+them. However, you often want to listen to object events for specific types
+of objects, e.g. "IMyContent was the subject of an IObjectAdded". With a
+general handler, you'd need to check the object type as the fist line in
+the handler, which would be wasteful and error-prone.
+
+Instead, you can register a handler for two interfaces (analogous to a
+multi-adapter) - the object type, and the event type:
+
+    >>> class IBand(Interface):
+    ...     """A band
+    ...     """
+    ...     
+    ...     name = Attribute("The name of the band")
+
+    >>> class Band(object):
+    ...     implements(IBand)
+    ...     
+    ...     def __init__(self, name):
+    ...         self.name = name
+
+    >>> from zope.lifecycleevent.interfaces import IObjectModifiedEvent
+    >>> @adapter(IBand, IObjectModifiedEvent)
+    ... def band_changed(band, event):
+    ...     assert band == event.object # At least normally, see below
+    ...     print "Changes to the lineup in", band.name
+    >>> provideHandler(band_changed)
+
+In ZCML, this registration would be::
+
+    <subscriber
+        for=".interfaces.IBand
+              zope.lifecycleevent.interfaces.IObjectModifiedEvent"
+        handler=".events.band_changed"
+        />
+
+Ordinarily, container and lifecycle events are emitted by the framework, but
+there is nothing stopping us from executing them ourselves.
+
+    >>> from zope.lifecycleevent import ObjectModifiedEvent
+    >>> beatles = Band("The Beatles")
+    >>> notify(ObjectModifiedEvent(beatles))
+    Changes to the lineup in The Beatles
+    
+Of course, this does not apply more generally:
+
+    >>> notify(ObjectModifiedEvent(object()))
+
+Behind the scenes, there is one generic event handler for ``IObjectEvent``,
+which extracts ``event.object`` and then redispatches based on that. Thus, any
+new event type you might create that derives from ``IObjectEvent`` will get
+this functionality for free.
+
+Take a look at ``zope.lifecycleevent.interfaces`` to see the various standard
+object events. The container events are mainly emitted from
+``OFS.ObjectManager``. The life cycle events tend to be emitted from view code
+in Plone and Archetypes. Archetypes also has a few specific object events,
+found in ``Products.Archetypes.interfaces``. These include
+``IObjectInitializedEvent``, which refers to when an object has been created
+"for real", i.e. it is saved to its final location and populated with data.
+
+Do watch out for the somewhat unorthodox inheritance hierarchy of the
+container events: they all derive from ``IObjectMovedEvent``, which has
+attributes ``oldParent``, ``oldName``, ``newParent`` and ``newName``, in
+addition to ``object`` which is inherited from ``IObjectEvent`` itself. During
+an ``IObjectAddedEvent``, ``oldParent`` and ``oldName`` are ``None`` (the
+object comes from nowhere and goes to a particular location). In an
+``IObjectRemovedEvent``, the reverse is true (the object is moved into the
+ether). Because general event handlers apply to specific events, this means
+that if you are truly interested in the "object has moved or been renamed"
+case, you need to listen for ``IObjectMovedEvent`` and then check that neither
+``oldParent``/``oldName`` nor ``newParent``/``newName`` are set.
+
+Also, be aware that container events are re-dispatched to sub-objects, 
+recursively. This means that if a parent object is removed or moved,
+children will be told as well. In this case, when using an object event
+handler, the first parameter ("the object") will be the current child object,
+but the event itself will reference the container that originated the chain
+of events. That is, event.object will not refer to the object passed as the
+first parameter to the event handler, but to some higher parent of that
+object.

@@ -1,0 +1,37 @@
+==========================
+Examples of path traversal
+==========================
+
+Explicit traversal starts at an object and uses a path-like expression. To
+invoke path traversal in Python code, we can use methods
+``unrestrictedTraverse()`` and ``restrictedTraverse()``, which are available
+on most content objects.
+
+``unrestrictedTraverse()`` is faster, since it does not take security into
+account. ``restrictedTraverse()`` explicitly checks whether the current user
+is allowed to access each element being traversed to. (This is how path
+traversal works for templates or scripts created through-the-web or in CMF
+skin layers.)
+    
+    >>> from plone.app.testing import setRoles
+    >>> from plone.app.testing import TEST_USER_NAME
+    
+    >>> portal = layer['portal']
+    
+    >>> setRoles(portal, TEST_USER_NAME, ('Manager',))
+    
+    >>> _ = portal.invokeFactory('Folder', 'guitars')
+    >>> _ = portal['guitars'].invokeFactory('Document', 'fender')
+    
+    >>> portal.unrestrictedTraverse('guitars/fender')
+    <ATDocument at /plone/guitars/fender>
+    
+The 'plone' part of the path refers to the Plone instance that is set up by
+the testing layer.
+    
+    >>> fenderPath = '/'.join(portal['guitars']['fender'].getPhysicalPath())
+    >>> fenderPath
+    '/plone/guitars/fender'
+    
+    >>> portal.unrestrictedTraverse(fenderPath)
+    <ATDocument at /plone/guitars/fender>

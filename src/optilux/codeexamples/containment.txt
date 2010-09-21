@@ -1,0 +1,44 @@
+==============================
+Examples of object containment
+==============================
+
+First, we create a ``Document`` object with id ``guitars``. We ignore the
+return value.
+    
+    >>> from plone.app.testing import setRoles
+    >>> from plone.app.testing import TEST_USER_NAME
+    
+    >>> portal = layer['portal']
+    
+    >>> setRoles(portal, TEST_USER_NAME, ('Manager',))
+
+    >>> _ = portal.invokeFactory('Document', 'favorites', title=u"Favorite guitars")
+
+Then, let's verify that it is inside the object:
+
+    >>> 'favorites' in portal
+    True
+    
+We can now retrieve the object, using dictionary notation:
+
+    >>> obj = portal['favorites']
+    >>> obj.getId()
+    'favorites'
+    
+We can also also use the ``aq_parent`` function to verify that the object
+knows its parent:
+
+    >>> from Acquisition import aq_parent
+    >>> aq_parent(obj) is portal
+    True
+    >>> obj.aq_parent is portal
+    True
+    
+In fact, when looking for the containment parent, it is safer to use
+``aq_inner``, which makes sure we get the innermost acquisition chain:
+
+    >>> from Acquisition import aq_inner
+    >>> containment_parent = aq_parent(aq_inner(obj))
+    >>> also_containment_parent = obj.aq_inner.aq_parent
+    >>> containment_parent is also_containment_parent
+    True

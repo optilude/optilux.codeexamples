@@ -1,0 +1,151 @@
+=============================
+Examples of using the catalog
+=============================
+
+First, let us create some content.
+
+    >>> from plone.app.testing import setRoles
+    >>> from plone.app.testing import TEST_USER_NAME
+    
+    >>> portal = layer['portal']
+    
+    >>> setRoles(portal, TEST_USER_NAME, ('Manager',))
+
+    >>> from Products.CMFCore.utils import getToolByName
+    
+    >>> wftool = getToolByName(portal, 'portal_workflow')
+    >>> wftool.setDefaultChain('simple_publication_workflow')
+    
+    >>> _ = portal.invokeFactory('Folder', 'folder', title=u"A folder")
+    >>> folder = portal['folder']
+
+    >>> _ = folder.invokeFactory('Document', 'favorites', title=u"Favorite guitars")
+    >>> _ = folder.invokeFactory('Folder', 'guitars', title=u"Guitars")
+    >>> _ = folder['guitars'].invokeFactory('News Item', 'strat', title=u"New Strat!")
+    >>> _ = folder['guitars'].invokeFactory('News Item', 'tele', title=u"New Tele!", subject=('Fender',))
+    >>> _ = folder['guitars'].invokeFactory('News Item', 'lp', title=u"News Les Paul", subject=('Guitars',))
+    >>> _ = folder['guitars'].invokeFactory('Document', 'fender', title=u"Fender", subject=('Fender', 'Guitars',))
+    >>> _ = folder['guitars'].invokeFactory('Image', 'jagstang', title=u"Jagstang", subject=('Fender', 'Guitars',))
+    >>> _ = folder['guitars'].invokeFactory('Folder', 'basses', title=u"Basses")
+    >>> _ = folder['guitars']['basses'].invokeFactory('Document', 'pbass', title=u"Precision bass")
+
+Let us also change the workflow state of the news item to published.
+
+    >>> wftool.doActionFor(folder['guitars']['strat'], 'publish')
+    >>> wftool.doActionFor(folder['guitars']['lp'], 'publish')
+
+Without the catalog, we need to traverse the object graph to locate objects
+in the portal. This can be slow, although it is sometimes appropriate for
+small folders.
+
+    >>> sorted(folder.keys())
+    ['favorites', 'guitars']
+    >>> folderContents = folder.values()
+    >>> folderContents[0].portal_type
+    'Document'
+    >>> folderContents[1].Title()
+    'Guitars'
+    
+Let us instead use the catalog! We can get hold of it like this:
+
+    >>> catalog = getToolByName(portal, 'portal_catalog')
+
+You can call the catalog with various criteria. To retrieve all published
+news items, we can use:
+
+    >>> for brain in catalog({'portal_type': 'News Item', 'review_state': 'published'}):
+    ...     print brain.getPath()
+    /plone/folder/guitars/strat
+    /plone/folder/guitars/lp
+    
+The following statement is equivalent. We can use the ``searchResults()``
+method instead of calling the catalog:
+
+    >>> for brain in catalog.searchResults({'portal_type' : 'News Item', 'review_state' : 'published'}):
+    ...     print '/'.join(brain.getObject().getPhysicalPath())
+    /plone/folder/guitars/strat
+    /plone/folder/guitars/lp
+
+We also show how to use ``getObject()`` to retrieve the fully object. Note
+that this removes the efficiency advantage of using the catalog, so it is a
+bad idea unless you know the result set is going to be relatively small.
+    
+To get the URL of an object, we can use the ``getURL()`` function on the
+catalog brain. This is equivalent to ``absolute_url()`` on a real object, and
+properly takes care of virtual hosting scenarios.
+
+    >>> for brain in catalog({'portal_type': 'News Item', 'review_state': 'published'}):
+    ...     print brain.getURL() == brain.getObject().absolute_url()
+    True
+    True
+    
+When using a ``FieldIndex`` (for single-valued fields) or ``KeywordIndex``
+(for multi- valued fields), we can pass a tuple or list of values to search
+for one or more of them (a logical "or"):
+
+    >>> results = catalog({'portal_type': ('Document', 'News Item',),
+    ...                    'Subject': ('Guitars', 'Fender',)})
+    >>> sorted([r.getId for r in results])
+    ['fender', 'lp', 'tele']
+    
+The ``path`` index is somewhat special. It allows you to specify a depth, were
+0 means "only the specified path" and 1 means "only children of the specified
+path". Without a depth, all children are found:
+
+    >>> guitarsPath = '/'.join(folder['guitars'].getPhysicalPath())
+    >>> results = catalog(path=guitarsPath)
+    >>> sorted([r.getId for r in results])
+    ['basses', 'fender', 'guitars', 'jagstang', 'lp', 'pbass', 'strat', 'tele']
+    
+    >>> results = catalog({'path': {'query': guitarsPath, 'depth': 0}})
+    >>> sorted([r.getId for r in results])
+    ['guitars']
+    
+    >>> results = catalog({'path': {'query': guitarsPath, 'depth': 1}})
+    >>> sorted([r.getId for r in results])
+    ['basses', 'fender', 'jagstang', 'lp', 'strat', 'tele']
+    
+To control the order and number of items, use ``sort_on``, ``sort_order`` and 
+``sort_limit``. Note that ``sort_limit`` is more of a hint than a dictate, so
+we normally limit the results explicitly anyway.
+
+    >>> results = catalog({'portal_type': 'Document', 'sort_on': 'sortable_title'})
+    >>> [r.Title for r in results]
+    ['Favorite guitars', 'Fender', 'Precision bass']
+    
+    >>> results = catalog({'portal_type': 'Document', 'sort_on': 'sortable_title', 'sort_order': 'descending'})
+    >>> [r.Title for r in results]
+    ['Precision bass', 'Fender', 'Favorite guitars']
+    
+    >>> limit = 5
+    >>> results = catalog({'portal_type': 'Document', 'sort_on': 'sortable_title', 'sort_limit': limit})[:limit]
+    >>> [r.Title for r in results]
+    ['Favorite guitars', 'Fender', 'Precision bass']
+    
+Up until now, we have searched by ``portal_type``. It may be more appropriate
+to search by interface, since interfaces are more general descriptions of
+objects (see also ``interfaces.txt``). This example searches for all standard
+content types that are "textual":
+
+    >>> from Products.ATContentTypes.interface import ITextContent
+    >>> results = catalog({'object_provides': ITextContent.__identifier__})
+    >>> sorted([r.getId for r in results])
+    ['favorites', 'fender', 'lp', 'pbass', 'strat', 'tele']
+
+By listening to object modified events (see ``events.txt``) the catalog will
+automatically reindex objects as needed. When manipulating objects in code,
+however, we sometimes need to reindex manually.
+
+    >>> folder['favorites'].setDescription("Contains a list of favorites")
+    >>> len(catalog({'Description': "list of favorites"}))
+    0
+    
+    >>> folder['favorites'].reindexObject(idxs=['Description'])
+    >>> len(catalog({'Description': "list of favorites"}))
+    1
+    
+    >>> folder['favorites'].setDescription("My favorites!")
+    >>> folder['favorites'].setTitle("My favorite guitars")
+    >>> folder['favorites'].reindexObject()
+    >>> len(catalog({'Title': "My favorite guitars"}))
+    1

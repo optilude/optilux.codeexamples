@@ -1,0 +1,372 @@
+===============================
+Examples of using Zope adapters
+===============================
+
+Simple adapters
+---------------
+
+Adapters are a way to generalize various aspects of components. They can 
+often be viewed as an alternative to inheritance in object-oriented 
+programming. Let's say that we wanted to be able to play guitars (who 
+wouldn't?). Here is a naive OOP-like solution:
+
+    >>> class PlayableMixin(object):
+    ...     def play(self, tune):
+    ...         print "Strumming along to", tune
+
+    >>> class BassGuitar(PlayableMixin):
+    ...     pass
+
+    >>> class ClassicGuitar(PlayableMixin):
+    ...     pass
+
+    >>> BassGuitar().play("Smoke on the Water")
+    Strumming along to Smoke on the Water
+
+Using polymorphism, other code could expect to get some kind of
+``PlayableMixin``- derivative and call its ``play()`` method. However, what if
+we also needed to have guitars that were carryable and color-aware and kept
+track of who owned them? Quickly, there would be a multitude of mix-in
+classes, and any time we wanted to add a new aspect to various classes
+guitars, we'd need to go change all of them. What a mess!
+
+    >>> del PlayableMixin
+    >>> del BassGuitar
+    >>> del ClassicGuitar
+
+Adapters solve this problem by acting as small glue components. An adapter
+*provides* an interface for calling code to depend on, and then *adapts* a
+"context" that provides another interface to the desired interface.
+
+    >>> from zope.interface import Interface, Attribute
+    >>> class IGuitar(Interface):
+    ...     """A guitar
+    ...     """
+    ...
+    ...     strings = Attribute("Number of strings")
+
+    >>> class IAcoustic(IGuitar):
+    ...     """An acoustic guitar
+    ...     """
+
+    >>> class IElectric(IGuitar):
+    ...     """An electric guitar
+    ...     """
+
+So far, we have modeled the idea of different types of guitars. Let us now
+model the idea of something being playable.
+
+    >>> class IPlayable(Interface):
+    ...     """An instrument that can be played
+    ...     """
+    ...
+    ...     def __call__(tune):
+    ...         """Play that tune!
+    ...         """
+
+As per the interfaces, the guitars themselves don't know anything about how
+they are to be played.
+
+    >>> from zope.interface import implements
+    >>> class Acoustic(object):
+    ...     implements(IAcoustic)
+    ...     strings = 6
+    
+    >>> class Electric(object):
+    ...     implements(IElectric)
+    ...     strings = 6
+
+    >>> taylor = Acoustic()
+    >>> tele = Electric()
+
+Let's suppose we had some code to play a song:
+
+    >>> def jam(playable):
+    ...     playable("All Along the Watchtower")
+
+This expects to be passed an IPlayable, but all we have are ``IGuitar``'s. We 
+need to adapt these to fulfill the "playable" aspect of a guitar object. For
+that, we will write an adapter.
+
+    >>> from zope.component import adapts
+    >>> class GuitarPlayer(object):
+    ...     implements(IPlayable)
+    ...     adapts(IGuitar)
+    ...     
+    ...     def __init__(self, context):
+    ...         self.context = context
+    ...         
+    ...     def __call__(self, tune):
+    ...         print "Strumming along to", tune
+
+We declare that this object *adapts* an ``IGuitar`` into an ``IPlayable``, in
+that the adapter *implements* the latter interface. The ``__init__()`` method
+needs to take a parameter, conventionally called ``context`` which is the
+object being adapted, and otherwise the object needs to fulfill the contract
+of ``IPlayable``.
+
+Ordinarily, it is the Zope Component Architecture that is responsible for
+instantiating adapters. Therefore, we must register the adapter using ZCML::
+
+    <adapter factory=".players.GuitarPlayer" />
+    
+Or, more fully (and thus possibly omitting the 'implements' and 'adapts'
+declarations on the class)::
+
+    <adapter
+        provides=".interfaces.IPlayable"
+        for=".interfaces.IGuitar"
+        factory=".players.GuitarPlayer"
+        />
+
+As with utilities (see ``utilities.txt``), if the adapter does not
+non-ambiguously provide a single interface, the ``provides`` attribute may be
+required.
+
+In the test, we can use ``provideAdapter()`` from ``zope.component`` to
+achieve the same effect:
+
+    >>> from zope.component import provideAdapter
+    >>> provideAdapter(GuitarPlayer)
+
+Now, given a context object and a desired interface, we can ask the Component
+Architecture for an appropriate adapter for a particular interface:
+
+    >>> playable = IPlayable(tele)
+    >>> jam(playable)
+    Strumming along to All Along the Watchtower
+
+It's important to realize that the actual implementation of the adapter could
+come from anywhere, so long as it was registered with the CA. In this case,
+we have used a pretty general interface to register a pretty general adapter.
+
+    >>> class IBass(IGuitar):
+    ...     """A bass guitar
+    ...     """
+
+    >>> class Bass(object):
+    ...     implements(IBass)
+    ...     strings = 4
+
+    >>> pbass = Bass()
+    >>> jam(IPlayable(pbass))
+    Strumming along to All Along the Watchtower
+
+Of course, that's not quite right. In fact, we need a more specific adapter
+to deal with the idiosyncrasies of a four-string bass guitar. Therefore,
+we register a *more specific adapter*:
+
+    >>> class BassPlayer(object):
+    ...     implements(IPlayable)
+    ...     adapts(IBass)
+    ...     
+    ...     def __init__(self, context):
+    ...         self.context = context
+    ...         
+    ...     def __call__(self, tune):
+    ...         print "Slappin' it to", tune
+
+    >>> provideAdapter(BassPlayer)
+
+    >>> jam(IPlayable(pbass))
+    Slappin' it to All Along the Watchtower
+
+    >>> jam(IPlayable(tele))
+    Strumming along to All Along the Watchtower
+
+As you can see, the "more specific" bass adapter is used for a bass, and
+the more general guitar adapter is used for other types of guitars. The
+Component Architecture will generally work as you expect in this regard - a
+"more specific" adapter is one registered for an interface "further down" the
+inheritance hierarchy of objects and interfaces.
+
+Registering more specific adapters is a pretty elegant way of providing 
+customizations and specific behavior. For example, Plone may have a generic
+adapter for all content types, and you can declare an overriding adapter only
+for a specific content type. Such a general adapter can be declared as 
+adapting ``zope.interface.Interface`` (the most general interface) or, in ZCML,
+using ``for="*"``::
+
+    <adapter
+        for="*"
+        factory=".players.UniversalInstrumentPlayer"
+        />
+
+Because adapters can come from different packages entirely, you may not always
+be sure that an adapter has been registered. Normally, if the component 
+architecture can't find an adapter, it will raise a ``TypeError``:
+
+    >>> class IViolin(Interface):
+    ...     """A violin
+    ...     """
+
+    >>> class Violin(object):
+    ...     implements(IViolin)
+
+    >>> violin = Violin()
+    >>> playable = IPlayable(violin) #doctest: +ELLIPSIS
+    Traceback (most recent call last):
+    ...
+    TypeError: ('Could not adapt', <Violin object at ...>, <InterfaceClass __builtin__.IPlayable>)
+    
+You can be a bit more defensive by passing a default value to the interface's
+call method:
+
+    >>> playable = IPlayable(violin, None)
+    >>> playable is None
+    True
+
+Adapters are very prevalent in the Zope world. In general, different aspects
+of functionality are factored out into separate interfaces and looked up as
+adapters. It can take some time to get used to designing with adapters, but
+it tends to pay off in terms of more flexible code that is easier to test and
+much easier to extend in the future.
+
+Multi-adapters
+--------------
+
+In the examples above, we have seen how to adapt a single object. It is
+also possible to adapt multiple objects. This allows you to specialize the 
+implementation by any or all of the adapted types.
+
+    >>> class IAmp(Interface):
+    ...     """An amplifier
+    ...     """
+    ...     
+    ...     goes_up_to = Attribute("How far up does it go?")
+
+    >>> class IGiggable(Interface):
+    ...     """A setup which can be gigged
+    ...     """
+    ...     
+    ...     def __call__(stage_set):
+    ...         """Gig a particular set
+    ...         """
+
+    >>> class ElevenAmp(object):
+    ...     implements(IAmp)
+    ...     goes_up_to = 11 # This one goes to eleven!
+
+    >>> vox = ElevenAmp()
+
+    >>> class GigRig(object):
+    ...     implements(IGiggable)
+    ...     adapts(IElectric, IAmp)
+    ...     
+    ...     def __init__(self, guitar, amp):
+    ...         self.guitar = guitar
+    ...         self.amp = amp
+    ...     
+    ...     def __call__(self, stage_set):
+    ...         print "Setting volume to", self.amp.goes_up_to
+    ...         playable = IPlayable(self.guitar)
+    ...         for song in stage_set:
+    ...             playable(song)
+    
+    >>> provideAdapter(GigRig)
+
+In ZCML, we could register this with two interfaces in the ``for`` attribute,
+separated by whitespace::
+
+    <adapter
+        provides=".interfaces.IGiggable"
+        for=".interfaces.IElectric .interfaces.IAmp"
+        factory=".gig.GigRig"
+        />
+        
+We cannot use the interfaced-based syntax to look up these adapters, however.
+Instead, we use ``getMultiAdapter()``:
+
+    >>> from zope.component import getMultiAdapter
+    >>> gig = getMultiAdapter((tele, vox), IGiggable)
+    >>> gig(("Foxxy Lady", "Voodoo Chile",))
+    Setting volume to 11
+    Strumming along to Foxxy Lady
+    Strumming along to Voodoo Chile
+    
+There is also ``queryMultiAdapter()`` which will return None if the an adapter
+cannot be found:
+
+    >>> from zope.component import queryMultiAdapter
+    >>> gig = queryMultiAdapter((taylor, vox), IGiggable)
+    >>> gig is None
+    True
+    
+Named adapters
+--------------
+
+So far, we have seen how to vary which adapter is returned when looking up an
+adapter to a specific interface by registering them for more or less specific 
+interfaces. Sometimes, it may make sense to have multiple adapters for the
+same interface, distinguished explicitly by name. As with utilities, unnamed
+adapters are actually just a special case of named adapters, defaulting to
+the name ``u""``.
+
+Let's say we wanted to have the ``IPlayable`` vary by style. To avoid creating
+a new class for each style, we will use a general class and use a function,
+rather than the class itself, as the adapter factory. Zope doesn't really 
+care, so long as it can call the factory with the object(s) being adapted
+and get back an object that complies to the provided interface.
+
+    >>> class StyledGuitarPlayer(object):
+    ...     implements(IPlayable)
+    ...     
+    ...     def __init__(self, context, style):
+    ...         self.context = context
+    ...         self.style = style
+    ...         
+    ...     def __call__(self, tune):
+    ...         print self.style, "to", tune
+
+    >>> from zope.component import adapter
+    >>> from zope.interface import implementer
+
+    
+    >>> @implementer(IPlayable)
+    ... @adapter(IGuitar)
+    ... def fingerpicked_guitar(context):
+    ...     return StyledGuitarPlayer(context, 'Picking away')
+
+    >>> @implementer(IPlayable)
+    ... @adapter(IGuitar)
+    ... def strummed_guitar(context):
+    ...     return StyledGuitarPlayer(context, 'Strumming away')
+
+The ``@adapter`` and ``@implementer`` function decorators are equivalent to
+using ``adapts()`` an ``implements()`` in classes, only for functions. We
+could of course also have specified the ``for`` and ``provides`` attributes in
+the ``<adapter />`` ZCML statement.
+
+    >>> provideAdapter(fingerpicked_guitar, name=u"fingerpick")
+    >>> provideAdapter(strummed_guitar, name=u"strum")
+
+Let's say we asked the user which style he preferred. We could then use that
+to look up an appropriate adapter. To do so, we need to use ``getAdapter()``
+or ``queryAdapter()``, the latter returning None if the adapter can't be
+found.
+
+    >>> from zope.component import getAdapter
+    >>> preferred_style = u"fingerpick"
+    >>> playable = getAdapter(tele, IPlayable, name=preferred_style)
+    >>> playable("Like a Hurricane")
+    Picking away to Like a Hurricane
+    
+    >>> preferred_style = u"strum"
+    >>> playable = getAdapter(tele, IPlayable, name=preferred_style)
+    >>> playable("Like a Hurricane")
+    Strumming away to Like a Hurricane
+    
+Of course, multi-adapters can also be named. In fact, that is how views are
+implemented - they are named multi-adapters adapting a context object and the
+request. The ``getMultiAdapter()`` and ``queryMultiAdapter()`` methods take an
+optional ``name`` parameter which you can use to locate a multi adapter by
+name.
+
+Local adapters
+--------------
+
+Like utilities, adapters can be registered at a local component site. In
+Plone, we can use the ``componentregistry.xml`` GenericSetup import step for
+this purpose. Local adapters are very rare, however, so we will not discuss
+them further here.
+
