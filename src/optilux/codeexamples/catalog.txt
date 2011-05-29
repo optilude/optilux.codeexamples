@@ -83,8 +83,10 @@ When using a ``FieldIndex`` (for single-valued fields) or ``KeywordIndex``
 (for multi- valued fields), we can pass a tuple or list of values to search
 for one or more of them (a logical "or"):
 
-    >>> results = catalog({'portal_type': ('Document', 'News Item',),
-    ...                    'Subject': ('Guitars', 'Fender',)})
+    >>> results = catalog(
+    ...     {'portal_type': ('Document', 'News Item',),
+    ...      'Subject': ('Guitars', 'Fender',)}
+    ... )
     >>> sorted([r.getId for r in results])
     ['fender', 'lp', 'tele']
     
@@ -92,33 +94,41 @@ The ``path`` index is somewhat special. It allows you to specify a depth, were
 0 means "only the specified path" and 1 means "only children of the specified
 path". Without a depth, all children are found:
 
-    >>> guitarsPath = '/'.join(folder['guitars'].getPhysicalPath())
-    >>> results = catalog(path=guitarsPath)
-    >>> sorted([r.getId for r in results])
-    ['basses', 'fender', 'guitars', 'jagstang', 'lp', 'pbass', 'strat', 'tele']
-    
-    >>> results = catalog({'path': {'query': guitarsPath, 'depth': 0}})
-    >>> sorted([r.getId for r in results])
-    ['guitars']
-    
-    >>> results = catalog({'path': {'query': guitarsPath, 'depth': 1}})
-    >>> sorted([r.getId for r in results])
-    ['basses', 'fender', 'jagstang', 'lp', 'strat', 'tele']
+>>> guitarsPath = '/'.join(folder['guitars'].getPhysicalPath())
+>>> results = catalog(path=guitarsPath)
+>>> sorted([r.getId for r in results])
+['basses', 'fender', 'guitars', 'jagstang', 'lp', 'pbass', 'strat', 'tele']
+
+>>> results = catalog({'path': {'query': guitarsPath, 'depth': 0}})
+>>> sorted([r.getId for r in results])
+['guitars']
+
+>>> results = catalog({'path': {'query': guitarsPath, 'depth': 1}})
+>>> sorted([r.getId for r in results])
+['basses', 'fender', 'jagstang', 'lp', 'strat', 'tele']
     
 To control the order and number of items, use ``sort_on``, ``sort_order`` and 
 ``sort_limit``. Note that ``sort_limit`` is more of a hint than a dictate, so
 we normally limit the results explicitly anyway.
 
-    >>> results = catalog({'portal_type': 'Document', 'sort_on': 'sortable_title'})
+    >>> results = catalog(
+    ...     {'portal_type': 'Document', 'sort_on': 'sortable_title'}
+    ... )
     >>> [r.Title for r in results]
     ['Favorite guitars', 'Fender', 'Precision bass']
     
-    >>> results = catalog({'portal_type': 'Document', 'sort_on': 'sortable_title', 'sort_order': 'descending'})
+    >>> results = catalog(
+    ...     {'portal_type': 'Document', 'sort_on': 'sortable_title',
+    ...     'sort_order': 'descending'}
+    ... )
     >>> [r.Title for r in results]
     ['Precision bass', 'Fender', 'Favorite guitars']
     
     >>> limit = 5
-    >>> results = catalog({'portal_type': 'Document', 'sort_on': 'sortable_title', 'sort_limit': limit})[:limit]
+    >>> results = catalog(
+    ...     {'portal_type': 'Document', 'sort_on': 'sortable_title',
+    ...     'sort_limit': limit}
+    ... )[:limit]
     >>> [r.Title for r in results]
     ['Favorite guitars', 'Fender', 'Precision bass']
     
@@ -127,7 +137,7 @@ to search by interface, since interfaces are more general descriptions of
 objects (see also ``interfaces.txt``). This example searches for all standard
 content types that are "textual":
 
-    >>> from Products.ATContentTypes.interface import ITextContent
+    >>> from Products.ATContentTypes.interfaces import ITextContent
     >>> results = catalog({'object_provides': ITextContent.__identifier__})
     >>> sorted([r.getId for r in results])
     ['favorites', 'fender', 'lp', 'pbass', 'strat', 'tele']
